@@ -9,7 +9,11 @@ GXFifoObj* GXInit(void* base, u32 size) { return NULL; }
 // TODO GXReadDrawSync
 // TODO GXSetDrawSyncCallback
 
-void GXDrawDone() { DrawDoneCB(); }
+void GXDrawDone() {
+  if (DrawDoneCB != nullptr) {
+    DrawDoneCB();
+  }
+}
 
 void GXSetDrawDone() { DrawDoneCB(); }
 

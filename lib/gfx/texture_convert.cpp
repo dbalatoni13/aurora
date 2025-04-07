@@ -35,6 +35,8 @@ constexpr uint8_t HalfBlend(uint8_t a, uint8_t b) {
   return static_cast<uint8_t>((static_cast<uint32_t>(a) + static_cast<uint32_t>(b)) >> 1);
 }
 
+constexpr uint32_t RoundUp32(uint32_t x) { return (x + 31) & ~31; }
+
 static size_t ComputeMippedTexelCount(uint32_t w, uint32_t h, uint32_t mips) {
   size_t ret = w * h;
   for (uint32_t i = mips; i > 1; --i) {
@@ -269,8 +271,10 @@ ByteBuffer BuildC4FromGCN(uint32_t width, uint32_t height, uint32_t mips, ArrayR
 }
 
 ByteBuffer BuildC8FromGCN(uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint8_t> data) {
+  width = (width + 7) & ~7;
+  height = (height + 3) & ~3;
   const size_t texelCount = ComputeMippedTexelCount(width, height, mips);
-  ByteBuffer buf{texelCount * 2};
+  ByteBuffer buf{RoundUp32(texelCount * 2)};
 
   uint32_t w = width;
   uint32_t h = height;
@@ -347,7 +351,7 @@ ByteBuffer BuildRGB565FromGCN(uint32_t width, uint32_t height, uint32_t mips, Ar
 
 ByteBuffer BuildRGB5A3FromGCN(uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint8_t> data) {
   size_t texelCount = ComputeMippedTexelCount(width, height, mips);
-  ByteBuffer buf{sizeof(RGBA8) * texelCount};
+  ByteBuffer buf{RoundUp32(sizeof(RGBA8) * texelCount)};
 
   uint32_t w = width;
   uint32_t h = height;
