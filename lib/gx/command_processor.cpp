@@ -1,7 +1,6 @@
 #include "command_processor.hpp"
 
 #include "../gfx/common.hpp"
-#include "../gfx/texture_replacement.hpp"
 #include "dolphin/gx/GXAurora.h"
 #include "gx.hpp"
 #include "gx_fmt.hpp"
@@ -491,7 +490,6 @@ inline static u32 bp_get(u32 reg, u32 size, u32 shift) { return reg >> shift & (
 
 // BP register handler - decodes BP (RAS/pixel engine) register writes and updates g_gxState
 static void handle_bp(u32 value, bool bigEndian) {
-  ZoneScoped;
   u32 regId = (value >> 24) & 0xFF;
   // Mask off the register ID from the value for field extraction
   // (the regId is stored in bits 24-31, data is in bits 0-23)
@@ -1123,7 +1121,6 @@ static void handle_bp(u32 value, bool bigEndian) {
 
 // CP register handler - decodes CP register writes and updates g_gxState
 static void handle_cp(u8 addr, u32 value, bool bigEndian) {
-  ZoneScoped;
   switch (addr) {
   // VCD low (0x50)
   case 0x50: {
@@ -1165,6 +1162,7 @@ static void handle_cp(u8 addr, u32 value, bool bigEndian) {
   // Matrix index A (0x30)
   case 0x30: {
     g_gxState.currentPnMtx = bp_get(value, 6, 0) / 3;
+    g_gxState.stateDirty = true;
     break;
   }
 
@@ -1263,7 +1261,6 @@ static void handle_cp(u8 addr, u32 value, bool bigEndian) {
 
 // XF register handler - decodes XF (transform unit) register writes and updates g_gxState
 static void handle_xf(const u8* data, u32& pos, u32 size, bool bigEndian) {
-  ZoneScoped;
   CHECK(pos + 4 <= size, "XF header read overrun");
   u32 header = read_u32(data + pos, bigEndian);
   pos += 4;
@@ -1586,7 +1583,7 @@ static void handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
       lastDraw->idxRange.size += idxRange.size;
       lastDraw->vtxCount += vtxCount;
       lastDraw->indexCount += numIndices;
-      ++gfx::g_stats.mergedDrawCallCount;
+      ++gfx::g_mergedDrawCallCount;
       return;
     }
   }
@@ -1770,6 +1767,19 @@ void handle_aurora(const u8* data, u32& pos, u32 size, bool bigEndian) {
     slot.tlutDataVersion = read_u32(data + pos, bigEndian);
     pos += 4;
     slot.set_no_cache(false); // Reset no-cache flag
+    g_gxState.stateDirty = true;
+  } else if (subCmd == GX2_SET_POLYGON_OFFSET) {
+    CHECK(pos + 20 <= size, "GX2_SET_POLYGON_OFFSET read overrun");
+    g_gxState.frontOffset = read_f32(data + pos, bigEndian);
+    pos += 4;
+    g_gxState.frontScale = read_f32(data + pos, bigEndian);
+    pos += 4;
+    g_gxState.backOffset = read_f32(data + pos, bigEndian);
+    pos += 4;
+    g_gxState.backScale = read_f32(data + pos, bigEndian);
+    pos += 4;
+    g_gxState.clamp = read_f32(data + pos, bigEndian);
+    pos += 4;
     g_gxState.stateDirty = true;
   } else if (subCmd == GX_LOAD_AURORA_DESTROY_TEXOBJ) {
     CHECK(pos + 4 <= size, "GX_LOAD_AURORA_DESTROY_TEXOBJ read overrun");

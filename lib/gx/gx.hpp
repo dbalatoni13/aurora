@@ -380,6 +380,13 @@ struct GXState {
   }();
   std::array<u32, 0x1A> xfRegCache;
 
+  // GX2 state
+  f32 frontOffset = 0.0f;
+  f32 frontScale = 0.0f;
+  f32 backOffset = 0.0f;
+  f32 backScale = 0.0f;
+  f32 clamp = 0.0f;
+
   void clearVtxSizeCache() { lastVtxFmt = GX_MAX_VTXFMT; }
 };
 extern GXState g_gxState;
@@ -387,6 +394,7 @@ struct ShaderInfo;
 
 void initialize() noexcept;
 void shutdown() noexcept;
+void clear_static_texture_cache() noexcept;
 void clear_copy_texture_cache() noexcept;
 void evict_copy_texture(const void* dest) noexcept;
 void evict_texture_object(u32 texObjId) noexcept;
