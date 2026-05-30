@@ -322,6 +322,9 @@ void GXInitTlutObj(GXTlutObj* obj_, const void* data, GXTlutFmt format, u16 entr
 
 void GXInitTlutObjData(GXTlutObj* obj_, const void* data) {
   auto* obj = reinterpret_cast<GXTlutObj_*>(obj_);
+  if (obj->data == data) {
+    return;
+  }
   obj->data = data;
   ++obj->tlutDataVersion;
 }
