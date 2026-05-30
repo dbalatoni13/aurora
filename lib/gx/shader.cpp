@@ -572,25 +572,6 @@ constexpr std::array<std::string_view, GX_CA_ZERO + 1> TevAlphaArgNames{
     "APREV"sv, "A0"sv, "A1"sv, "A2"sv, "TEXA"sv, "RASA"sv, "KONST"sv, "ZERO"sv,
 };
 
-auto fetch_fixed16_attr(std::string_view fetchFn, const AttrConfig& mapping, std::string_view buf, 
-                        std::string_view offs, bool le) -> std::string {
-  // Some Adreno drivers appear sensitive to generated shaders that route 2- and
-  // 3-component fixed-16 vertex attributes through reusable vector fetch helpers.
-  // Emitting scalar component fetches at the call site avoids observed artifacts.
-  if (mapping.cnt == 2) {
-    const auto comp0 = fmt::format("{}_1(&{}, {} + 0u, {}u, {})", fetchFn, buf, offs, mapping.frac, le);
-    const auto comp1 = fmt::format("{}_1(&{}, {} + 2u, {}u, {})", fetchFn, buf, offs, mapping.frac, le);
-    return fmt::format("vec2f({}, {})", comp0, comp1);
-  }
-  if (mapping.cnt == 3) {
-    const auto comp0 = fmt::format("{}_1(&{}, {} + 0u, {}u, {})", fetchFn, buf, offs, mapping.frac, le);
-    const auto comp1 = fmt::format("{}_1(&{}, {} + 2u, {}u, {})", fetchFn, buf, offs, mapping.frac, le);
-    const auto comp2 = fmt::format("{}_1(&{}, {} + 4u, {}u, {})", fetchFn, buf, offs, mapping.frac, le);
-    return fmt::format("vec3f({}, {}, {})", comp0, comp1, comp2);
-  }
-  return fmt::format("{}_{}(&{}, {}, {}u, {})", fetchFn, mapping.cnt, buf, offs, mapping.frac, le);
-}
-
 auto fetch_attr(const AttrConfig& mapping, std::string_view buf, std::string_view offs, bool le) -> std::string {
   switch (mapping.compType) {
   case GX_U8:
@@ -598,9 +579,9 @@ auto fetch_attr(const AttrConfig& mapping, std::string_view buf, std::string_vie
   case GX_S8:
     return fmt::format("fetch_s8_{}(&{}, {}, {}, {})", mapping.cnt, buf, offs, mapping.frac, le);
   case GX_U16:
-    return fetch_fixed16_attr("fetch_u16"sv, mapping, buf, offs, le);
+    return fmt::format("fetch_u16_{}(&{}, {}, {}, {})", mapping.cnt, buf, offs, mapping.frac, le);
   case GX_S16:
-    return fetch_fixed16_attr("fetch_s16"sv, mapping, buf, offs, le);
+    return fmt::format("fetch_s16_{}(&{}, {}, {}, {})", mapping.cnt, buf, offs, mapping.frac, le);
   case GX_F32:
     return fmt::format("fetch_f32_{}(&{}, {}, {})", mapping.cnt, buf, offs, le);
   case GX_RGBA8:
@@ -668,7 +649,12 @@ auto attr_load(const ShaderConfig& config, GXAttr attr, std::string_view vidx) -
     return posLoad;
   }
   case GX_VA_NRM:
-    // TODO check for NBT/NBT3
+    // TODO full NBT/NBT3 TBN support; only the normal is consumed
+    if (mapping.cnt > 3) {
+      auto nrmMapping = mapping;
+      nrmMapping.cnt = 3;
+      return fetch_attr(nrmMapping, buf, offs, le);
+    }
     return fetch_attr(mapping, buf, offs, le);
   case GX_VA_CLR0:
   case GX_VA_CLR1:
@@ -1104,10 +1090,6 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
       vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, vtx_attr(config, GX_VA_POS));
     } else if (tcg.src == GX_TG_NRM) {
       vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, vtx_attr(config, GX_VA_NRM));
-    } else if (tcg.src == GX_TG_COLOR0) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = {};", i, vtx_attr(config, GX_VA_CLR0));
-    } else if (tcg.src == GX_TG_COLOR1) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = {};", i, vtx_attr(config, GX_VA_CLR1));
     } else
       UNLIKELY FATAL("unhandled tcg src {}", underlying(tcg.src));
     if (tcg.type == GX_TG_MTX2x4 || tcg.type == GX_TG_MTX3x4) {
@@ -1191,18 +1173,19 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
       continue;
     }
     const auto& indStage = config.indStages[i];
-    std::string scaleExpr;
-    if (indStage.scaleS == GX_ITS_1 && indStage.scaleT == GX_ITS_1) {
-      scaleExpr = fmt::format("tex{0}_uv", underlying(indStage.texCoordId));
-    } else {
-      scaleExpr = fmt::format("tex{0}_uv * vec2f({1}, {2})", underlying(indStage.texCoordId),
-                              ind_scale(indStage.scaleS), ind_scale(indStage.scaleT));
-    }
+    const u32 texCoordId = underlying(indStage.texCoordId);
+    const u32 texMapId = underlying(indStage.texMapId);
+    // GX applies the SU texture-coordinate scale before the indirect stage scale.
+    // The shader carries normalized UVs, so convert that texel-space result back
+    // into normalized coordinates for the indirect texture sample.
+    const auto scaleExpr =
+        fmt::format("tex{0}_uv * ubuf.texcoord_scale[{0}].xy * vec2f({1}, {2}) / ubuf.tex{3}_size_bias.xy",
+                    texCoordId, ind_scale(indStage.scaleS), ind_scale(indStage.scaleT), texMapId);
     fragmentFnPre += fmt::format(
         "\n    // Indirect stage {0}"
         "\n    var t_IndTexCoord{0} = 255.0 * textureSampleBias(tex{1}, tex{1}_samp, {2}, "
         "ubuf.tex{1}_size_bias.z).abg;",
-        i, underlying(indStage.texMapId), scaleExpr);
+        i, texMapId, scaleExpr);
   }
   if (info.usedIndStages.any()) {
     fragmentFnPre += "\n    var t_TexCoord = vec2f(0.0);";
@@ -1283,23 +1266,21 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
               ") * ind{0}_c1.z",
               i);
         } else if (stage.indTexMtxId >= GX_ITM_S0 && stage.indTexMtxId <= GX_ITM_S2 && hasBaseCoord) {
-          // Dynamic S: result = uv * texDim * ind_coord.x * scale / 256
+          // Dynamic S: result = scaled texcoord * ind_coord.x * scale / 256
           u32 mtxIdx = stage.indTexMtxId - GX_ITM_S0;
           u32 regTexCoord = underlying(stage.texCoordId);
-          u32 regTexMap = underlying(stage.texMapId);
           indirectOffsetTexel = fmt::format(
-              "tex{1}_uv * ubuf.tex{2}_size_bias.xy * ind{0}_coord.x"
-              " * ubuf.ind_mtx[{3}][1][2] / 256.0",
-              i, regTexCoord, regTexMap, mtxIdx);
+              "tex{1}_uv * ubuf.texcoord_scale[{1}].xy * ind{0}_coord.x"
+              " * ubuf.ind_mtx[{2}][1][2] / 256.0",
+              i, regTexCoord, mtxIdx);
         } else if (stage.indTexMtxId >= GX_ITM_T0 && stage.indTexMtxId <= GX_ITM_T2 && hasBaseCoord) {
-          // Dynamic T: result = uv * texDim * ind_coord.y * scale / 256
+          // Dynamic T: result = scaled texcoord * ind_coord.y * scale / 256
           u32 mtxIdx = stage.indTexMtxId - GX_ITM_T0;
           u32 regTexCoord = underlying(stage.texCoordId);
-          u32 regTexMap = underlying(stage.texMapId);
           indirectOffsetTexel = fmt::format(
-              "tex{1}_uv * ubuf.tex{2}_size_bias.xy * ind{0}_coord.y"
-              " * ubuf.ind_mtx[{3}][1][2] / 256.0",
-              i, regTexCoord, regTexMap, mtxIdx);
+              "tex{1}_uv * ubuf.texcoord_scale[{1}].xy * ind{0}_coord.y"
+              " * ubuf.ind_mtx[{2}][1][2] / 256.0",
+              i, regTexCoord, mtxIdx);
         }
       }
 
@@ -1330,12 +1311,11 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
       std::string baseCoordExpr;
       if (hasBaseCoord) {
         u32 texCoordId = underlying(stage.texCoordId);
-        u32 texMapId = underlying(stage.texMapId);
         if (useSimpleCoords) {
           baseCoordExpr = fmt::format("tex{}_uv", texCoordId);
         } else {
           fragmentFnPre +=
-              fmt::format("\n    var ind{0}_texel = tex{1}_uv * ubuf.tex{2}_size_bias.xy;", i, texCoordId, texMapId);
+              fmt::format("\n    var ind{0}_texel = tex{1}_uv * ubuf.texcoord_scale[{1}].xy;", i, texCoordId);
           baseCoordExpr = fmt::format("ind{}_texel", i);
         }
       }
@@ -1430,6 +1410,9 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
     }
     fragmentFn += "\n    prev = vec4f(mix(prev.rgb, ubuf.fog.color.rgb, clamp(fogZ, 0.0, 1.0)), prev.a);";
   }
+  if (info.usedIndStages.any()) {
+    uniBufAttrs += fmt::format("\n    texcoord_scale: array<vec4f, {}>,", MaxTexCoord);
+  }
   if (info.usedIndTexMtxs.any()) {
     uniBufAttrs += "\n    ind_mtx: array<mat2x4f, 3>,";
   }
@@ -1493,19 +1476,8 @@ fn bswap16(v: u32, le: bool) -> u32 {{
   return select(((v & 0xFFu) << 8u) | (v >> 8u), v, le);
 }}
 
-fn load_word(p: ptr<storage, array<u32>>, word_idx: u32) -> u32 {{
-  // This guard is not expected to handle routine out-of-bounds accesses.
-  // It appears to discourage some Adreno drivers/optimizers from storage buffer
-  // optimizations that can cause visual artifacts, including vertex explosions
-  // in Dusklight.
-  if (word_idx < arrayLength(p)) {{
-    return p[word_idx];
-  }}
-  return 0u;
-}}
-
 fn load_u8(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {{
-  let word = load_word(p, byte_off / 4u);
+  let word = p[byte_off / 4u];
   let shift = (byte_off & 3u) * 8u;
   return (word >> shift) & 0xFFu;
 }}
@@ -1513,11 +1485,11 @@ fn load_u8(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {{
 fn load_u32_raw(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {{
   let word_idx = byte_off >> 2u;
   let sub = byte_off & 3u;
-  let lo = load_word(p, word_idx);
+  let lo = p[word_idx];
   if (sub == 0u) {{
     return lo;
   }}
-  let hi = load_word(p, word_idx + 1u);
+  let hi = p[word_idx + 1u];
   let shift = sub * 8u;
   return (lo >> shift) | (hi << (32u - shift));
 }}
@@ -1525,11 +1497,11 @@ fn load_u32_raw(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {{
 fn load_u16(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {{
   let word_idx = byte_off >> 2u;
   let sub = byte_off & 3u;
-  let word = load_word(p, word_idx);
+  let word = p[word_idx];
   if (sub <= 2u) {{
     return bswap16(extractBits(word, sub * 8u, 16u), le);
   }}
-  let next = load_word(p, word_idx + 1u);
+  let next = p[word_idx + 1u];
   let raw = extractBits(word, 24u, 8u) | (extractBits(next, 0u, 8u) << 8u);
   return bswap16(raw, le);
 }}
@@ -1559,7 +1531,7 @@ fn raw_fetch_u8_1(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {{
 fn raw_fetch_u8_2(p: ptr<storage, array<u32>>, byte_off: u32) -> vec2u {{
   let word_idx = byte_off >> 2u;
   let sub = byte_off & 3u;
-  let word = load_word(p, word_idx);
+  let word = p[word_idx];
   if (sub <= 2u) {{
     let shift = sub * 8u;
     return vec2u(
@@ -1567,7 +1539,7 @@ fn raw_fetch_u8_2(p: ptr<storage, array<u32>>, byte_off: u32) -> vec2u {{
       extractBits(word, shift + 8u, 8u),
     );
   }}
-  let next = load_word(p, word_idx + 1u);
+  let next = p[word_idx + 1u];
   return vec2u(
     extractBits(word, 24u, 8u),
     extractBits(next, 0u, 8u),

@@ -16,14 +16,11 @@ bool is_alpha_bump_channel(GXChannelID id) { return id == GX_ALPHA_BUMP || id ==
 Vec4<float> texture_size_bias(const gfx::TextureBind& tex) {
   auto width = static_cast<float>(tex.texObj.width());
   auto height = static_cast<float>(tex.texObj.height());
-  float vpBias = 0.f;
-  if (enableLodBias && tex.ref && tex.ref->hasArbitraryMips) {
-    const float viewportScale =
-        std::min(g_gxState.renderViewport.width / std::max(g_gxState.logicalViewport.width, 1.f),
-                 g_gxState.renderViewport.height / std::max(g_gxState.logicalViewport.height, 1.f));
-    const float replacementScale = static_cast<float>(tex.ref->size.width) / std::max(width, 1.f);
-    vpBias = std::log2(viewportScale / std::max(replacementScale, 0.001f));
-  }
+  const auto vpBias =
+      enableLodBias && tex.ref && tex.ref->hasArbitraryMips
+          ? log2(std::min(g_gxState.renderViewport.width / std::max(g_gxState.logicalViewport.width, 1.f),
+                          g_gxState.renderViewport.height / std::max(g_gxState.logicalViewport.height, 1.f)))
+          : 0.f;
   return {width, height, tex.texObj.lod_bias() + vpBias, 0.0f};
 }
 
@@ -306,6 +303,9 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     info.usesFog = true;
     info.uniformSize += sizeof(Fog);
   }
+  if (info.usedIndStages.any()) {
+    info.uniformSize += MaxTexCoord * sizeof(Vec4<float>);
+  }
   if (info.usedIndTexMtxs.any()) {
     info.uniformSize += MaxIndTexMtxs * sizeof(Mat2x4<float>);
   }
@@ -445,6 +445,12 @@ gfx::Range build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGroupRa
     const auto& state = g_gxState.fog;
     Fog fog{.color = state.color, .a = state.a, .b = state.b, .c = state.c};
     buf.append(fog);
+  }
+  if (info.usedIndStages.any()) {
+    for (const auto& scale : g_gxState.texCoordScales) {
+      buf.append(
+          Vec4{static_cast<f32>(scale.scaleS) + 1.0f, static_cast<f32>(scale.scaleT) + 1.0f, 0.0f, 0.0f});
+    }
   }
   if (info.usedIndTexMtxs.any()) {
     for (int i = 0; i < MaxIndTexMtxs; ++i) {
