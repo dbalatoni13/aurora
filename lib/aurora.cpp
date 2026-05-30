@@ -57,9 +57,9 @@ constexpr std::array PreferredBackendOrder{
 // #ifdef DAWN_ENABLE_BACKEND_DESKTOP_GL
 //     BACKEND_OPENGL,
 // #endif
-// #ifdef DAWN_ENABLE_BACKEND_OPENGLES
-//     BACKEND_OPENGLES,
-// #endif
+#ifdef DAWN_ENABLE_BACKEND_OPENGLES
+    BACKEND_OPENGLES,
+#endif
 #ifdef DAWN_ENABLE_BACKEND_NULL
     BACKEND_NULL,
 #endif
@@ -89,6 +89,11 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexce
   } else {
     g_config.cachePath = strdup(g_config.cachePath);
   }
+  if (g_config.resourcesPath == nullptr) {
+    g_config.resourcesPath = SDL_GetBasePath();
+  } else {
+    g_config.resourcesPath = strdup(g_config.resourcesPath);
+  }
   if (g_config.msaa == 0) {
     g_config.msaa = 1;
   }
@@ -106,7 +111,7 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexce
   AuroraBackend selectedBackend = config.desiredBackend;
   bool windowCreated = false;
   if (selectedBackend != BACKEND_AUTO && window::create_window(selectedBackend)) {
-    if (webgpu::initialize(selectedBackend)) {
+    if (webgpu::initialize(selectedBackend, config.allowCpuAdapter)) {
       windowCreated = true;
     } else {
       window::destroy_window();
@@ -119,7 +124,7 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexce
       if (!window::create_window(selectedBackend)) {
         continue;
       }
-      if (webgpu::initialize(selectedBackend)) {
+      if (webgpu::initialize(selectedBackend, config.allowCpuAdapter)) {
         windowCreated = true;
         break;
       } else {
@@ -269,10 +274,11 @@ void end_frame() noexcept {
       auto viewport = webgpu::calculate_present_viewport(webgpu::g_graphicsConfig.surfaceConfiguration.width,
                                                          webgpu::g_graphicsConfig.surfaceConfiguration.height,
                                                          presentSource.size.width, presentSource.size.height);
-      wgpu::BindGroup presentBindGroup = webgpu::g_CopyBindGroup;
+      const auto& resampledSource = webgpu::resample_present_source(encoder, viewport);
+      wgpu::BindGroup presentBindGroup = webgpu::create_copy_bind_group(resampledSource);
     #if AURORA_ENABLE_RMLUI
       if (rmlui::is_initialized()) {
-        const auto rmlOutput = rmlui::render(encoder, viewport);
+        const auto rmlOutput = rmlui::render(encoder, viewport, resampledSource);
         if (rmlOutput.texture != nullptr) {
           presentBindGroup = rmlOutput.copyBindGroup;
         }
@@ -380,4 +386,11 @@ void aurora_set_pause_on_focus_lost(bool value) { aurora::g_config.pauseOnFocusL
 void aurora_set_background_input(bool value) {
   aurora::g_config.allowJoystickBackgroundEvents = value;
   aurora::window::set_background_input(value);
+}
+void aurora_set_resampler(AuroraSampler sampler) {
+#ifdef AURORA_ENABLE_GX
+  aurora::webgpu::set_resampler(sampler);
+#else
+  (void)sampler;
+#endif
 }
