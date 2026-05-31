@@ -303,6 +303,10 @@ void* GXGetTexObjData(GXTexObj* tex_obj) {
   return const_cast<void*>(reinterpret_cast<const GXTexObj_*>(tex_obj)->data);
 }
 
+void* GXGetTlutObjData(GXTlutObj* tlut_obj) {
+  return const_cast<void*>(reinterpret_cast<const GXTlutObj_*>(tlut_obj)->data);
+}
+
 u16 GXGetTexObjWidth(GXTexObj* tex_obj) { return static_cast<u16>(reinterpret_cast<const GXTexObj_*>(tex_obj)->width()); }
 
 u16 GXGetTexObjHeight(GXTexObj* tex_obj) { return static_cast<u16>(reinterpret_cast<const GXTexObj_*>(tex_obj)->height()); }
@@ -328,7 +332,6 @@ GXBool GXGetTexObjMipMap(GXTexObj* tex_obj) { return reinterpret_cast<const GXTe
 // TODO GXGetTexObjMaxAniso
 // TODO GXGetTexObjLODAll
 u32 GXGetTexObjTlut(const GXTexObj* tex_obj) { return reinterpret_cast<const GXTexObj_*>(tex_obj)->tlut; }
-// TODO GXGetTlutObjData
 // TODO GXGetTlutObjFmt
 // TODO GXGetTlutObjNumEntries
 // TODO GXGetTlutObjAll

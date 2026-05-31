@@ -1383,6 +1383,28 @@ TEST_F(GXFifoTest, LoadTexObjCiAndTlut_PopulatesTextureAndTlutSlots) {
   EXPECT_EQ(tlutSlot.tlutDataVersion, 1u);
 }
 
+TEST_F(GXFifoTest, InitTlutObjData_UpdatesDataPointerAndVersion) {
+  alignas(32) u16 paletteA[16]{};
+  alignas(32) u16 paletteB[16]{};
+  GXTlutObj tlutObj{};
+
+  GXInitTlutObj(&tlutObj, paletteA, GX_TL_RGB565, 16);
+  EXPECT_EQ(GXGetTlutObjData(&tlutObj), paletteA);
+
+  GXInitTlutObjData(&tlutObj, paletteB);
+  GXLoadTlut(&tlutObj, GX_TLUT3);
+  auto bytes = capture_fifo();
+
+  EXPECT_EQ(GXGetTlutObjData(&tlutObj), paletteB);
+
+  reset_gx_state();
+  decode_fifo(bytes);
+
+  const auto& tlutSlot = gxState().loadedTluts[GX_TLUT3];
+  EXPECT_EQ(tlutSlot.data, paletteB);
+  EXPECT_EQ(tlutSlot.tlutDataVersion, 2u);
+}
+
 TEST_F(GXFifoTest, DestroyTexObj_EmitsAuroraDestroyCommandAndClearsIdentity) {
   alignas(32) u8 image[64]{};
   GXTexObj obj{};
