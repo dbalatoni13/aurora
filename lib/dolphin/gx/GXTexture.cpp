@@ -324,6 +324,7 @@ void GXInitTlutObjData(GXTlutObj* obj_, const void* data) {
   auto* obj = reinterpret_cast<GXTlutObj_*>(obj_);
   obj->data = data;
   ++obj->tlutDataVersion;
+  aurora::gfx::texture_replacement::register_tlut(obj_, data, obj->format, obj->numEntries);
 }
 
 void GXLoadTlut(const GXTlutObj* obj_, u32 idx) {
